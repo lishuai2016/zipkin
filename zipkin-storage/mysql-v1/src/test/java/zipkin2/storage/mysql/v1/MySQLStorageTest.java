@@ -13,11 +13,16 @@
  */
 package zipkin2.storage.mysql.v1;
 
+import java.io.IOException;
 import java.sql.SQLException;
 import javax.sql.DataSource;
 import org.junit.Test;
 import zipkin2.CheckResult;
+import zipkin2.Endpoint;
+import zipkin2.Span;
+import zipkin2.v1.V1Span;
 
+import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -41,6 +46,19 @@ public class MySQLStorageTest {
         .strictTraceId(false)
         .executor(Runnable::run)
         .datasource(dataSource)
+        .autocompleteKeys(asList("http.method"))
         .build();
+  }
+
+  @Test
+  public void returns_whitelisted_autocompletekey() throws SQLException, IOException {
+    DataSource dataSource = mock(DataSource.class);
+    when(dataSource.getConnection()).thenThrow(new SQLException("foo"));
+    assertThat(
+      storage(dataSource)
+        .autocompleteTags()
+        .getKeys()
+        .execute())
+      .containsOnlyOnce("http.method");
   }
 }

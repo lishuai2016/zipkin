@@ -92,7 +92,7 @@ final class DependencyLinkV2SpanIterator implements Iterator<Span> {
     long spanId = row.getValue(ZipkinSpans.ZIPKIN_SPANS.ID);
     boolean error = false;
     String lcService = null, srService = null, csService = null, caService = null, saService = null;
-    while (hasNext()) { // there are more values for this trace
+    while (hasNext()) { // there are more getValues for this trace
       if (spanId != delegate.peek().getValue(ZipkinSpans.ZIPKIN_SPANS.ID)) {
         break; // if we are in a new span
       }

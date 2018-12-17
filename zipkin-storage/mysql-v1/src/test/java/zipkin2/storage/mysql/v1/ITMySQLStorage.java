@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.jooq.DSLContext;
 import org.jooq.Query;
+import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.experimental.runners.Enclosed;
 import org.junit.runner.RunWith;
@@ -96,6 +97,18 @@ public class ITMySQLStorage {
     }
 
     @Override public void clear() {
+      storage.get().clear();
+    }
+  }
+
+  public static class ITAutocompleteTags extends zipkin2.storage.ITAutocompleteTags {
+    @ClassRule public static LazyMySQLStorage storage = classRule();
+
+    @Override protected StorageComponent.Builder storageBuilder() {
+      return storage.computeStorageBuilder();
+    }
+
+    @Before @Override public void clear() {
       storage.get().clear();
     }
   }
