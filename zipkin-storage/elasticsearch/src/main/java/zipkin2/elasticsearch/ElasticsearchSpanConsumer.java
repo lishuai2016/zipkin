@@ -15,8 +15,10 @@ package zipkin2.elasticsearch;
 
 import com.squareup.moshi.JsonWriter;
 import java.io.IOException;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -30,6 +32,8 @@ import zipkin2.elasticsearch.internal.HttpBulkIndexer;
 import zipkin2.elasticsearch.internal.IndexNameFormatter;
 import zipkin2.elasticsearch.internal.client.HttpCall;
 import zipkin2.storage.SpanConsumer;
+
+import static zipkin2.elasticsearch.ElasticsearchAutocompleteTags.AUTOCOMPLETE;
 
 class ElasticsearchSpanConsumer implements SpanConsumer { // not final for testing
   static final Logger LOG = Logger.getLogger(ElasticsearchSpanConsumer.class.getName());
@@ -66,6 +70,7 @@ class ElasticsearchSpanConsumer implements SpanConsumer { // not final for testi
         if (indexTimestamp == 0L) indexTimestamp = System.currentTimeMillis();
       }
       indexer.add(indexTimestamp, span, spanTimestamp);
+      indexer.addTag(indexTimestamp, span);
     }
   }
 
@@ -73,22 +78,55 @@ class ElasticsearchSpanConsumer implements SpanConsumer { // not final for testi
     final HttpBulkIndexer indexer;
     final IndexNameFormatter indexNameFormatter;
     final boolean searchEnabled;
+    final Set<String> autocompleteKeys;
 
     BulkSpanIndexer(ElasticsearchStorage es) {
       this.indexer = new HttpBulkIndexer("index-span", es);
       this.indexNameFormatter = es.indexNameFormatter();
       this.searchEnabled = es.searchEnabled();
+      this.autocompleteKeys = new LinkedHashSet<>(es.autocompleteKeys());
     }
 
     void add(long indexTimestamp, Span span, long timestampMillis) {
       String index =
-          indexNameFormatter.formatTypeAndTimestamp(ElasticsearchSpanStore.SPAN, indexTimestamp);
+        indexNameFormatter.formatTypeAndTimestamp(ElasticsearchSpanStore.SPAN, indexTimestamp);
       byte[] document =
-          searchEnabled
-              ? prefixWithTimestampMillisAndQuery(span, timestampMillis)
-              : SpanBytesEncoder.JSON_V2.encode(span);
+        searchEnabled
+          ? prefixWithTimestampMillisAndQuery(span, timestampMillis)
+          : SpanBytesEncoder.JSON_V2.encode(span);
       indexer.add(
-          index, ElasticsearchSpanStore.SPAN, document, null /* Allow ES to choose an ID */);
+        index, ElasticsearchSpanStore.SPAN, document, null /* Allow ES to choose an ID */);
+    }
+
+    void addTag(long indexTimestamp, Span span) {
+      if (span.tags().isEmpty()) return;
+      try {
+        Buffer query = new Buffer();
+        for (Map.Entry<String, String> tag : span.tags().entrySet()) {
+          // If the autocomplete whitelist doesn't contain the key, skip storing its value
+          if (!autocompleteKeys.contains(tag.getKey())) continue;
+
+          JsonWriter writer = JsonWriter.of(query);
+          writer.beginObject();
+          writer.name("tagkey");
+          writer.value(tag.getKey());
+          writer.name("tagvalue");
+          writer.value(tag.getValue());
+          writer.endObject();
+          String index = indexNameFormatter.formatTypeAndTimestamp(AUTOCOMPLETE, indexTimestamp);
+          byte[] document = query.readByteArray();
+          query.clear();
+          // Id of the document will be combination of {key,value} so that duplicate autocomplete
+          // keys can be avoided
+          indexer.add(index, AUTOCOMPLETE, document, tag.getKey() + "|" + tag.getValue());
+        }
+      } catch (IOException e) {
+        // very unexpected to have an IOE for an in-memory write
+        assert false : "Error indexing autocomplete tags for span: " + span;
+        if (LOG.isLoggable(Level.FINE)) {
+          LOG.log(Level.FINE, "Error indexing autocomplete tags for span: " + span, e);
+        }
+      }
     }
 
     HttpCall<Void> newCall() {
@@ -101,10 +139,10 @@ class ElasticsearchSpanConsumer implements SpanConsumer { // not final for testi
    * when storing. The cheapest way to do this without changing the codec is prefixing it to the
    * json. For example. {"traceId":"... becomes {"timestamp_millis":12345,"traceId":"...
    *
-   * <p>Tags are stored as a dictionary. Since some tag names will include inconsistent number of
+   * <p>Tags are stored as a dictionary. Since some key names will include inconsistent number of
    * dots (ex "error" and perhaps "error.message"), we cannot index them naturally with
    * elasticsearch. Instead, we add an index-only (non-source) field of {@code _q} which includes
-   * valid search queries. For example, the tag {@code error -> 500} results in {@code
+   * valid search queries. For example, the key {@code error -> 500} results in {@code
    * "_q":["error", "error=500"]}. This matches the input query syntax, and can be checked manually
    * with curl.
    *
@@ -115,7 +153,6 @@ class ElasticsearchSpanConsumer implements SpanConsumer { // not final for testi
     JsonWriter writer = JsonWriter.of(query);
     try {
       writer.beginObject();
-
       if (timestampMillis != 0L) writer.name("timestamp_millis").value(timestampMillis);
       if (!span.tags().isEmpty() || !span.annotations().isEmpty()) {
         writer.name("_q");
@@ -133,11 +170,11 @@ class ElasticsearchSpanConsumer implements SpanConsumer { // not final for testi
           }
           writer.value(tag.getKey()); // search is possible by key alone
           writer.value(
-              new StringBuilder(length)
-                  .append(tag.getKey())
-                  .append("=")
-                  .append(tag.getValue())
-                  .toString());
+            new StringBuilder(length)
+              .append(tag.getKey())
+              .append("=")
+              .append(tag.getValue())
+              .toString());
         }
         writer.endArray();
       }

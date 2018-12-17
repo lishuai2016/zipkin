@@ -376,6 +376,19 @@ public class ZipkinElasticsearchStorageAutoConfigurationTest {
     assertThat(context.getBean(ElasticsearchStorage.class).searchEnabled()).isFalse();
   }
 
+  @Test
+  public void tags_list() {
+    context = new AnnotationConfigApplicationContext();
+    TestPropertyValues.of(
+      "zipkin.storage.type:elasticsearch",
+      "zipkin.storage.autocompleteKeys:environment")
+      .applyTo(context);
+    Access.registerElasticsearchHttp(context);
+    context.refresh();
+
+    assertThat(context.getBean(ElasticsearchStorage.class).autocompleteKeys())
+      .containsOnly("environment");
+  }
   ElasticsearchStorage es() {
     return context.getBean(ElasticsearchStorage.class);
   }
